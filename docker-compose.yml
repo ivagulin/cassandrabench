@@ -27,11 +27,14 @@ services:
       on-failure
     healthcheck:
       test: ["CMD-SHELL", "nodetool status"]
-      interval: 2m
-      start_period: 2m
+      interval: 10s
       timeout: 10s
-      retries: 3
+      retries: 60
     cpus: 3
+    blkio_config:
+       device_write_iops:
+         - path: /dev/nvme0n1
+           rate: 2000
 
   cassandra-2:
     image: "cassandra:latest"  # cassandra:4.1.3
@@ -59,11 +62,14 @@ services:
       on-failure
     healthcheck:
       test: ["CMD-SHELL", "nodetool status"]
-      interval: 2m
-      start_period: 2m
+      interval: 10s
       timeout: 10s
-      retries: 3
+      retries: 60
     cpus: 3
+    blkio_config:
+      device_write_iops:
+        - path: /dev/nvme0n1
+          rate: 2000
 
   cassandra-3:
     image: "cassandra:latest"  # cassandra:4.1.3
@@ -91,11 +97,14 @@ services:
       on-failure
     healthcheck:
       test: ["CMD-SHELL", "nodetool status"]
-      interval: 2m
-      start_period: 2m
+      interval: 10s
       timeout: 10s
-      retries: 3
+      retries: 60
     cpus: 3
+    blkio_config:
+      device_write_iops:
+        - path: /dev/nvme0n1
+          rate: 2000
 
 volumes:
   cassandra-node-1:

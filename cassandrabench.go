@@ -15,25 +15,24 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 var (
-	concurrency = flag.Int("concurrency", 24, "Number of concurrent goroutines")
+	concurrency = flag.Int("concurrency", 64, "Number of concurrent goroutines")
 	benchtime   = flag.Duration("benchtime", 10*time.Second, "Bench time")
-	scale       = flag.Int("scale", 1000, "Scaling factor")
+	scale       = flag.Int("scale", 100, "Scaling factor")
 	RWMode      = flag.Bool("rwmode", false, "Read write mode")
 	initMode    = flag.Bool("init", false, "init")
 )
 
 var (
-	accountPrefix = "bench.pgbench_accounts"
-	tellerPrefix  = "bench.pgbench_tellers"
-	branchPrefix  = "bench.pgbench_branches"
-	historyPrefix = "bench.pgbench_history"
+	accountTable = "bench.pgbench_accounts"
+	tellerTable  = "bench.pgbench_tellers"
+	branchTable  = "bench.pgbench_branches"
+	historyTable = "bench.pgbench_history"
 )
 
 type Account struct {
@@ -61,10 +60,10 @@ type History struct {
 	Mtime time.Time `db:"mtime"`
 }
 
-func fillTable(session gocqlx.Session, prefix string, limit int, keycolumn string, valcolumn string) {
+func fillTable(session gocqlx.Session, table string, limit int, keycolumn string, valcolumn string) {
 	created := 0
 
-	it := qb.Select(prefix).Columns(keycolumn).Query(session).Iter()
+	it := qb.Select(table).Columns(keycolumn).Query(session).Iter()
 	var id int
 	for it.Scan(&id) {
 		if id > created {
@@ -77,11 +76,12 @@ func fillTable(session gocqlx.Session, prefix string, limit int, keycolumn strin
 	}
 
 	for created < limit {
-		slog.Info("filling table", "prefix", prefix, "limit", limit, "created", created)
+		slog.Info("filling table", "table", table, "limit", limit, "created", created)
 		batch := session.NewBatch(gocql.UnloggedBatch)
-		for it := created; it < limit && it-created < 100; it++ {
-			q := qb.Update(prefix).SetLit(valcolumn, valcolumn+"+1").Where(qb.EqNamed(keycolumn, keycolumn)).Query(session).Consistency(gocql.One)
-			err = batch.BindMap(q, map[string]interface{}{keycolumn: it})
+		for it := created; it < limit && it-created < 500; it++ {
+			//q := qb.Update(table).SetLit(valcolumn, valcolumn+"+1").Where(qb.EqNamed(keycolumn, keycolumn)).Query(session).Consistency(gocql.One)
+			q := qb.Insert(table).Columns(keycolumn, valcolumn).Query(session).Consistency(gocql.Any)
+			err = batch.BindMap(q, map[string]interface{}{keycolumn: it, valcolumn: 0})
 			if err != nil {
 				panic(err)
 			}
@@ -99,11 +99,11 @@ func fill(session gocqlx.Session) {
 	tellersToCreate := *scale * 10
 	branchesToCreate := *scale * 1
 
-	fillTable(session, accountPrefix, accountsToCreate, "aid", "abalance")
+	fillTable(session, accountTable, accountsToCreate, "aid", "abalance")
 
-	fillTable(session, tellerPrefix, tellersToCreate, "tid", "tbalance")
+	fillTable(session, tellerTable, tellersToCreate, "tid", "tbalance")
 
-	fillTable(session, branchPrefix, branchesToCreate, "bid", "bbalance")
+	fillTable(session, branchTable, branchesToCreate, "bid", "bbalance")
 }
 
 func readWrite(session gocqlx.Session) {
@@ -111,51 +111,74 @@ func readWrite(session gocqlx.Session) {
 	tid := rand.IntN(*scale * 10)
 	bid := rand.IntN(*scale * 1)
 	adelta := rand.Int64N(10000) - 5000
-	strdelta := strconv.FormatInt(adelta, 10)
 
-	batch := session.NewBatch(gocql.UnloggedBatch)
+	var accountBalance, tellerBalance, branchBalance int64
+	var err error
+
+	err = qb.Select(accountTable).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).
+		BindMap(map[string]interface{}{"aid": aid}).
+		Scan(&accountBalance)
+	if err != nil {
+		panic(err)
+	}
+
+	err = qb.Select(tellerTable).Columns("tbalance").Where(qb.EqNamed("tid", "tid")).Query(session).
+		BindMap(map[string]interface{}{"tid": tid}).
+		Scan(&tellerBalance)
+	if err != nil {
+		panic(err)
+	}
+
+	err = qb.Select(branchTable).Columns("bbalance").Where(qb.EqNamed("bid", "bid")).Query(session).
+		BindMap(map[string]interface{}{"bid": bid}).
+		Scan(&branchBalance)
+	if err != nil {
+		panic(err)
+	}
+
+	batch := session.NewBatch(gocql.LoggedBatch)
 	//UPDATE pgbench_accounts SET abalance = abalance + :delta WHERE aid = :aid;
-	aq := qb.Update(accountPrefix).SetLit("abalance", "abalance + "+strdelta).Where(qb.EqNamed("aid", "aid")).Query(session)
-	err := batch.BindMap(aq, map[string]interface{}{"aid": &aid})
+	aq := qb.Update(accountTable).SetNamed("abalance", "abalance").Where(qb.EqNamed("aid", "aid")).Query(session)
+	err = batch.BindMap(aq, map[string]interface{}{"aid": aid, "abalance": accountBalance + adelta})
 	if err != nil {
 		panic(err)
 	}
 
 	//UPDATE pgbench_tellers SET tbalance = tbalance + :delta WHERE tid = :tid;
-	tq := qb.Update(tellerPrefix).SetLit("tbalance", "tbalance + "+strdelta).Where(qb.EqNamed("tid", "tid")).Query(session)
-	err = batch.BindMap(tq, map[string]interface{}{"tid": &tid})
+	tq := qb.Update(tellerTable).SetNamed("tbalance", "tbalance").Where(qb.EqNamed("tid", "tid")).Query(session)
+	err = batch.BindMap(tq, map[string]interface{}{"tid": tid, "tbalance": tellerBalance + adelta})
 	if err != nil {
 		panic(err)
 	}
 
 	//UPDATE pgbench_branches SET bbalance = bbalance + :delta WHERE bid = :bid;
-	bq := qb.Update(branchPrefix).SetLit("bbalance", "bbalance + "+strdelta).Where(qb.EqNamed("bid", "bid")).Query(session)
-	err = batch.BindMap(bq, map[string]interface{}{"bid": &bid})
-	if err != nil {
-		panic(err)
-	}
-	err = session.ExecuteBatch(batch)
+	bq := qb.Update(branchTable).SetNamed("bbalance", "bbalance").Where(qb.EqNamed("bid", "bid")).Query(session)
+	err = batch.BindMap(bq, map[string]interface{}{"bid": bid, "bbalance": branchBalance + adelta})
 	if err != nil {
 		panic(err)
 	}
 
 	//INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (:tid, :bid, :aid, :delta, CURRENT_TIMESTAMP);
-	hq := qb.Insert(historyPrefix).Columns("tid", "bid", "aid", "delta", "mtime").Query(session).BindStruct(
-		History{
-			AID:   int64(aid),
-			TID:   int64(tid),
-			BID:   int64(bid),
-			Delta: int64(adelta),
-			Mtime: time.Now(),
-		})
-	err = hq.ExecRelease()
+	hq := qb.Insert(historyTable).Columns("tid", "bid", "aid", "delta", "mtime").Query(session)
+	err = batch.BindStruct(hq, History{
+		AID:   int64(aid),
+		TID:   int64(tid),
+		BID:   int64(bid),
+		Delta: int64(adelta),
+		Mtime: time.Now(),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	err = session.ExecuteBatch(batch)
 	if err != nil {
 		panic(err)
 	}
 
 	//SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
 	var queriedBalance int
-	err = qb.Select(accountPrefix).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).
+	err = qb.Select(accountTable).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).
 		BindMap(map[string]interface{}{"aid": aid}).
 		Scan(&queriedBalance)
 	if err != nil {
@@ -166,7 +189,7 @@ func readWrite(session gocqlx.Session) {
 func read(session gocqlx.Session) {
 	aid := rand.IntN(*scale * 100_000)
 	var queriedBalance int
-	err := qb.Select(accountPrefix).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).
+	err := qb.Select(accountTable).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).Consistency(gocql.One).
 		BindMap(map[string]interface{}{"aid": aid}).
 		Scan(&queriedBalance)
 	if err != nil {
@@ -194,19 +217,24 @@ func main() {
 	t1 := `
 	CREATE TABLE IF NOT EXISTS bench.pgbench_accounts (
 		aid int PRIMARY KEY,
-		abalance counter
+		bid int,
+		abalance int,
+		fillter text
 	)`
 
 	t2 := `
 	CREATE TABLE IF NOT EXISTS bench.pgbench_tellers (
 		tid int PRIMARY KEY,
-		tbalance counter
+		bid int,
+		tbalance int,
+		filler text
 	)`
 
 	t3 := `
 	CREATE TABLE IF NOT EXISTS bench.pgbench_branches (
 		bid int PRIMARY KEY,
-		bbalance counter
+		bbalance int,
+		filler text
 	)`
 
 	t4 := `
