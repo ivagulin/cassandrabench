@@ -23,18 +23,16 @@ services:
       - MAX_HEAP_SIZE=2048M
     volumes:
       - cassandra-node-1:/var/lib/cassandra:rw
-    restart:
-      on-failure
     healthcheck:
       test: ["CMD-SHELL", "nodetool status"]
       interval: 10s
       timeout: 10s
       retries: 60
-    cpus: 3
-    blkio_config:
-       device_write_iops:
-         - path: /dev/nvme0n1
-           rate: 2000
+#    cpus: 3
+#    blkio_config:
+#       device_write_iops:
+#         - path: /dev/nvme0n1
+#           rate: 2000
 
   cassandra-2:
     image: "cassandra:latest"  # cassandra:4.1.3
@@ -58,18 +56,16 @@ services:
         condition: service_healthy
     volumes:
       - cassandra-node-2:/var/lib/cassandra:rw
-    restart:
-      on-failure
     healthcheck:
       test: ["CMD-SHELL", "nodetool status"]
       interval: 10s
       timeout: 10s
       retries: 60
-    cpus: 3
-    blkio_config:
-      device_write_iops:
-        - path: /dev/nvme0n1
-          rate: 2000
+#    cpus: 3
+#    blkio_config:
+#      device_write_iops:
+#        - path: /dev/nvme0n1
+#          rate: 2000
 
   cassandra-3:
     image: "cassandra:latest"  # cassandra:4.1.3
@@ -93,18 +89,16 @@ services:
         condition: service_healthy
     volumes:
       - cassandra-node-3:/var/lib/cassandra:rw
-    restart:
-      on-failure
     healthcheck:
       test: ["CMD-SHELL", "nodetool status"]
       interval: 10s
       timeout: 10s
       retries: 60
-    cpus: 3
-    blkio_config:
-      device_write_iops:
-        - path: /dev/nvme0n1
-          rate: 2000
+#    cpus: 3
+#    blkio_config:
+#      device_write_iops:
+#        - path: /dev/nvme0n1
+#          rate: 2000
 
 volumes:
   cassandra-node-1:

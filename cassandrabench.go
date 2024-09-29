@@ -9,6 +9,7 @@ import (
 	"github.com/samber/lo"
 	"github.com/scylladb/gocqlx/v3"
 	"github.com/scylladb/gocqlx/v3/qb"
+	"golang.org/x/sync/errgroup"
 	"log"
 	"log/slog"
 	"math/rand/v2"
@@ -23,7 +24,7 @@ import (
 var (
 	concurrency = flag.Int("concurrency", 64, "Number of concurrent goroutines")
 	benchtime   = flag.Duration("benchtime", 10*time.Second, "Bench time")
-	scale       = flag.Int("scale", 100, "Scaling factor")
+	scale       = flag.Int("scale", 1000, "Scaling factor")
 	RWMode      = flag.Bool("rwmode", false, "Read write mode")
 	initMode    = flag.Bool("init", false, "init")
 )
@@ -61,36 +62,43 @@ type History struct {
 }
 
 func fillTable(session gocqlx.Session, table string, limit int, keycolumn string, valcolumn string) {
+	var err error
 	created := 0
 
-	it := qb.Select(table).Columns(keycolumn).Query(session).Iter()
-	var id int
-	for it.Scan(&id) {
-		if id > created {
-			created = id
-		}
-	}
-	err := it.Close()
-	if err != nil {
-		panic(err)
-	}
+	//it := qb.Select(table).Columns(keycolumn).Query(session).Iter()
+	//var id int
+	//for it.Scan(&id) {
+	//	if id > created {
+	//		created = id
+	//	}
+	//}
+	//err := it.Close()
+	//if err != nil {
+	//	panic(err)
+	//}
 
 	for created < limit {
 		slog.Info("filling table", "table", table, "limit", limit, "created", created)
-		batch := session.NewBatch(gocql.UnloggedBatch)
-		for it := created; it < limit && it-created < 500; it++ {
-			//q := qb.Update(table).SetLit(valcolumn, valcolumn+"+1").Where(qb.EqNamed(keycolumn, keycolumn)).Query(session).Consistency(gocql.One)
-			q := qb.Insert(table).Columns(keycolumn, valcolumn).Query(session).Consistency(gocql.Any)
-			err = batch.BindMap(q, map[string]interface{}{keycolumn: it, valcolumn: 0})
-			if err != nil {
-				panic(err)
+		eg := errgroup.Group{}
+		eg.SetLimit(*concurrency)
+		for _ = range 100 {
+			batch := session.NewBatch(gocql.UnloggedBatch)
+			for it := created; it < limit && it-created < 100; it++ {
+				q := qb.Insert(table).Columns(keycolumn, valcolumn).Query(session).Consistency(gocql.Any)
+				err = batch.BindMap(q, map[string]interface{}{keycolumn: it, valcolumn: 0})
+				if err != nil {
+					panic(err)
+				}
 			}
+			eg.Go(func() error {
+				return session.ExecuteBatch(batch)
+			})
+			created += 100
 		}
-		err = session.ExecuteBatch(batch)
+		err = eg.Wait()
 		if err != nil {
 			panic(err)
 		}
-		created += 100
 	}
 }
 
