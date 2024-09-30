@@ -22,8 +22,8 @@ import (
 )
 
 var (
-	concurrency = flag.Int("concurrency", 64, "Number of concurrent goroutines")
-	benchtime   = flag.Duration("benchtime", 10*time.Second, "Bench time")
+	concurrency = flag.Int("concurrency", 128, "Number of concurrent goroutines")
+	benchtime   = flag.Duration("benchtime", 3600*time.Second, "Bench time")
 	scale       = flag.Int("scale", 1000, "Scaling factor")
 	RWMode      = flag.Bool("rwmode", false, "Read write mode")
 	initMode    = flag.Bool("init", false, "init")
@@ -214,6 +214,7 @@ func main() {
 
 	cluster := gocql.NewCluster("localhost:9042", "localhost:9043", "localhost:9044")
 	cluster.Timeout = 60 * time.Second
+	cluster.Consistency = gocql.One
 	session, err := gocqlx.WrapSession(cluster.CreateSession())
 	if err != nil {
 		log.Fatal(err)
@@ -275,6 +276,7 @@ func main() {
 	defer cancelFunc()
 	var wg sync.WaitGroup
 	wg.Add(*concurrency)
+	startTime := time.Now()
 	for _ = range *concurrency {
 		go func() {
 			defer wg.Done()
@@ -293,6 +295,21 @@ func main() {
 			}
 		}()
 	}
+
+	ticker := time.Tick(time.Second)
+	for time.Since(startTime) < *benchtime {
+		startIterTime := time.Now()
+		startIterations := atomic.LoadUint64(&iterations)
+		select {
+		case <-ticker:
+			iterLength := time.Since(startIterTime)
+			finishIterations := atomic.LoadUint64(&iterations)
+			tps := float64(finishIterations-startIterations) / (iterLength.Seconds())
+			elapsed := time.Since(startTime).Truncate(time.Second).Seconds()
+			//slog.Info("results", "iterations", iterations, "elapsed", .Seconds(), "tps", tpsString)
+			fmt.Printf("intermediate results: %9d iterations %6d sec, %12.3f tps\n", finishIterations, int64(elapsed), tps)
+		}
+	}
 	wg.Wait()
 
 	slog.Info("throughtput results", "concurrency", *concurrency, "iterations", iterations, "conflicts", conflicts)
@@ -306,5 +323,4 @@ func main() {
 	throughput := fmt.Sprintf("%0.3f", float64(iterations)/benchtime.Seconds())
 	table.Append([]string{testName, latency, throughput})
 	table.Render()
-
 }
