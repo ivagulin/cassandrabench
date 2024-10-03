@@ -25,7 +25,7 @@ var (
 	concurrency = flag.Int("concurrency", 128, "Number of concurrent goroutines")
 	benchtime   = flag.Duration("benchtime", 3600*time.Second, "Bench time")
 	scale       = flag.Int("scale", 1000, "Scaling factor")
-	RWMode      = flag.Bool("rwmode", false, "Read write mode")
+	RWMode      = flag.Bool("rwmode", true, "Read write mode")
 	initMode    = flag.Bool("init", false, "init")
 )
 
@@ -118,11 +118,10 @@ func readWrite(session gocqlx.Session) {
 	aid := rand.IntN(*scale * 100_000)
 	tid := rand.IntN(*scale * 10)
 	bid := rand.IntN(*scale * 1)
-	adelta := rand.Int64N(10000) - 5000
 
-	var accountBalance, tellerBalance, branchBalance int64
 	var err error
 
+	var accountBalance int64
 	err = qb.Select(accountTable).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).
 		BindMap(map[string]interface{}{"aid": aid}).
 		Scan(&accountBalance)
@@ -130,6 +129,7 @@ func readWrite(session gocqlx.Session) {
 		panic(err)
 	}
 
+	var tellerBalance int64
 	err = qb.Select(tellerTable).Columns("tbalance").Where(qb.EqNamed("tid", "tid")).Query(session).
 		BindMap(map[string]interface{}{"tid": tid}).
 		Scan(&tellerBalance)
@@ -137,6 +137,7 @@ func readWrite(session gocqlx.Session) {
 		panic(err)
 	}
 
+	var branchBalance int64
 	err = qb.Select(branchTable).Columns("bbalance").Where(qb.EqNamed("bid", "bid")).Query(session).
 		BindMap(map[string]interface{}{"bid": bid}).
 		Scan(&branchBalance)
@@ -144,8 +145,9 @@ func readWrite(session gocqlx.Session) {
 		panic(err)
 	}
 
-	batch := session.NewBatch(gocql.LoggedBatch)
 	//UPDATE pgbench_accounts SET abalance = abalance + :delta WHERE aid = :aid;
+	adelta := rand.Int64N(10000) - 5000
+	batch := session.NewBatch(gocql.LoggedBatch)
 	aq := qb.Update(accountTable).SetNamed("abalance", "abalance").Where(qb.EqNamed("aid", "aid")).Query(session)
 	err = batch.BindMap(aq, map[string]interface{}{"aid": aid, "abalance": accountBalance + adelta})
 	if err != nil {
@@ -183,27 +185,28 @@ func readWrite(session gocqlx.Session) {
 	if err != nil {
 		panic(err)
 	}
-
-	//SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
-	var queriedBalance int
-	err = qb.Select(accountTable).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).
-		BindMap(map[string]interface{}{"aid": aid}).
-		Scan(&queriedBalance)
-	if err != nil {
-		panic(err)
-	}
 }
 
 func read(session gocqlx.Session) {
 	aid := rand.IntN(*scale * 100_000)
 	var queriedBalance int
 	err := qb.Select(accountTable).Columns("abalance").Where(qb.EqNamed("aid", "aid")).Query(session).Consistency(gocql.One).
+		//RoutingKey([]byte(strconv.Itoa(aid))).
 		BindMap(map[string]interface{}{"aid": aid}).
 		Scan(&queriedBalance)
 	if err != nil {
 		panic(err)
 	}
 }
+
+//one node rwmode
+//progress:    591752 iterations     54 sec,    12038.555 tps
+//progress:    604598 iterations     55 sec,    12843.228 tps
+//progress:    616497 iterations     56 sec,    11900.213 tps
+//3 nodes no batch
+//progress:   2102675 iterations     92 sec,    24597.420 tps 5.199 lat
+//progress:   2128653 iterations     93 sec,    25975.540 tps 4.928 lat
+//progress:   2151865 iterations     94 sec,    23207.516 tps 5.515 lat
 
 func main() {
 	flag.Parse()
@@ -212,16 +215,20 @@ func main() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	cluster := gocql.NewCluster("localhost:9042", "localhost:9043", "localhost:9044")
-	cluster.Timeout = 60 * time.Second
+	cluster := gocql.NewCluster("10.201.0.2")
+	cluster.Timeout = 0
 	cluster.Consistency = gocql.One
+	cluster.PoolConfig.HostSelectionPolicy = gocql.TokenAwareHostPolicy(gocql.RoundRobinHostPolicy())
+	cluster.WriteCoalesceWaitTime = 0
+	cluster.WriteTimeout = 0
+
 	session, err := gocqlx.WrapSession(cluster.CreateSession())
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer session.Close()
 
-	t0 := `CREATE KEYSPACE IF NOT EXISTS bench WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}`
+	t0 := `CREATE KEYSPACE IF NOT EXISTS bench WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}`
 
 	t1 := `
 	CREATE TABLE IF NOT EXISTS bench.pgbench_accounts (
@@ -307,7 +314,7 @@ func main() {
 			tps := float64(finishIterations-startIterations) / (iterLength.Seconds())
 			elapsed := time.Since(startTime).Truncate(time.Second).Seconds()
 			//slog.Info("results", "iterations", iterations, "elapsed", .Seconds(), "tps", tpsString)
-			fmt.Printf("intermediate results: %9d iterations %6d sec, %12.3f tps\n", finishIterations, int64(elapsed), tps)
+			fmt.Printf("progress: %9d iterations %6d sec, %12.3f tps %0.3f lat \n", finishIterations, int64(elapsed), tps, float64(iterLength.Milliseconds())/tps*float64(*concurrency))
 		}
 	}
 	wg.Wait()
