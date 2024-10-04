@@ -25,7 +25,7 @@ var (
 	concurrency = flag.Int("concurrency", 128, "Number of concurrent goroutines")
 	benchtime   = flag.Duration("benchtime", 3600*time.Second, "Bench time")
 	scale       = flag.Int("scale", 1000, "Scaling factor")
-	RWMode      = flag.Bool("rwmode", true, "Read write mode")
+	RWMode      = flag.Bool("rwmode", false, "Read write mode")
 	initMode    = flag.Bool("init", false, "init")
 )
 
@@ -77,8 +77,14 @@ func fillTable(session gocqlx.Session, table string, limit int, keycolumn string
 	//	panic(err)
 	//}
 
+	var startTime = time.Now()
 	for created < limit {
-		slog.Info("filling table", "table", table, "limit", limit, "created", created)
+		var eta time.Time
+		if created > 0 {
+			remaininigMs := (time.Since(startTime)).Milliseconds() * int64(limit-created) / int64(created)
+			eta = time.Now().Add(time.Duration(remaininigMs) * time.Millisecond)
+		}
+		slog.Info("filling table", "table", table, "limit", limit, "created", created, "eta", eta)
 		eg := errgroup.Group{}
 		eg.SetLimit(*concurrency)
 		for _ = range 100 {
@@ -215,7 +221,7 @@ func main() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	cluster := gocql.NewCluster("10.201.0.2")
+	cluster := gocql.NewCluster("10.201.2.2")
 	cluster.Timeout = 0
 	cluster.Consistency = gocql.One
 	cluster.PoolConfig.HostSelectionPolicy = gocql.TokenAwareHostPolicy(gocql.RoundRobinHostPolicy())
