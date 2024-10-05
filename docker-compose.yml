@@ -28,10 +28,7 @@ services:
       timeout: 10s
       retries: 60
     cpus: 3
-#    blkio_config:
-#       device_write_iops:
-#         - path: /dev/nvme0n1
-#           rate: 2000
+    mem_limit: 8gb
 
   cassandra-2:
     image: "cassandra:5"
@@ -61,10 +58,7 @@ services:
       timeout: 10s
       retries: 60
     cpus: 3
-#    blkio_config:
-#      device_write_iops:
-#        - path: /dev/nvme0n1
-#          rate: 2000
+    mem_limit: 8gb
 
   cassandra-3:
     image: "cassandra:5"
@@ -94,10 +88,7 @@ services:
       timeout: 10s
       retries: 60
     cpus: 3
-#    blkio_config:
-#      device_write_iops:
-#        - path: /dev/nvme0n1
-#          rate: 2000
+    mem_limit: 8gb
 
 volumes:
   cassandra-node-1:

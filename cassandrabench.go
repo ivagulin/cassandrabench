@@ -23,7 +23,7 @@ import (
 
 var (
 	concurrency = flag.Int("concurrency", 128, "Number of concurrent goroutines")
-	benchtime   = flag.Duration("benchtime", 3600*time.Second, "Bench time")
+	benchtime   = flag.Duration("benchtime", 300*time.Second, "Bench time")
 	scale       = flag.Int("scale", 1000, "Scaling factor")
 	RWMode      = flag.Bool("rwmode", false, "Read write mode")
 	initMode    = flag.Bool("init", false, "init")
@@ -86,7 +86,7 @@ func fillTable(session gocqlx.Session, table string, limit int, keycolumn string
 		}
 		slog.Info("filling table", "table", table, "limit", limit, "created", created, "eta", eta)
 		eg := errgroup.Group{}
-		eg.SetLimit(*concurrency)
+		eg.SetLimit(64)
 		for _ = range 100 {
 			batch := session.NewBatch(gocql.UnloggedBatch)
 			for it := created; it < limit && it-created < 100; it++ {
@@ -221,9 +221,9 @@ func main() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	cluster := gocql.NewCluster("10.201.2.2")
+	cluster := gocql.NewCluster("10.201.0.2")
 	cluster.Timeout = 0
-	cluster.Consistency = gocql.One
+	cluster.Consistency = gocql.Quorum
 	cluster.PoolConfig.HostSelectionPolicy = gocql.TokenAwareHostPolicy(gocql.RoundRobinHostPolicy())
 	cluster.WriteCoalesceWaitTime = 0
 	cluster.WriteTimeout = 0
@@ -234,7 +234,7 @@ func main() {
 	}
 	defer session.Close()
 
-	t0 := `CREATE KEYSPACE IF NOT EXISTS bench WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}`
+	t0 := `CREATE KEYSPACE IF NOT EXISTS bench WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}`
 
 	t1 := `
 	CREATE TABLE IF NOT EXISTS bench.pgbench_accounts (
